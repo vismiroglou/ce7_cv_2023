@@ -8,12 +8,12 @@ cap = cv.VideoCapture('Data/slow_traffic_small.mp4')
 ret,frame = cap.read()
 # setup initial location of window
 x, y, w, h = 591, 180, 40, 62 # simply hardcoded the values
-track_window = (x, y, w, h)
+track_window = (x, y, 20, 25)
 
 # set up the ROI for tracking
 roi = cv.imread('Data/biker.png')
 hsv_roi = cv.cvtColor(roi, cv.COLOR_BGR2HSV)    
-mask = cv.inRange(hsv_roi, np.array((0., 30.,80.)), np.array((180.,255.,255.)))
+mask = cv.inRange(hsv_roi, np.array((0., 60.,32.)), np.array((180.,255.,255.)))
 
 roi_hist = cv.calcHist([hsv_roi],[0],mask,[180],[0,180])
 cv.normalize(roi_hist,roi_hist,0,255,cv.NORM_MINMAX)
