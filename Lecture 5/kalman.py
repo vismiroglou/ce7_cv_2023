@@ -1,48 +1,8 @@
-import cv2
+import cv2 as cv
 import argparse
 import sys
 import math
 import numpy as np
-
-#####################################################################
-
-keep_processing = True
-selection_in_progress = False  # support interactive region selection
-fullscreen = False  # run in fullscreen mode
-
-# parse command line arguments for camera ID or video file
-
-parser = argparse.ArgumentParser(
-    description='Perform ' +
-    sys.argv[0] +
-    ' example operation on incoming camera/video image')
-parser.add_argument(
-    "-c",
-    "--camera_to_use",
-    type=int,
-    help="specify camera to use",
-    default=0)
-parser.add_argument(
-    "-r",
-    "--rescale",
-    type=float,
-    help="rescale image by this factor",
-    default=1.0)
-parser.add_argument(
-    'video_file',
-    metavar='video_file',
-    type=str,
-    nargs='?',
-    help='specify optional video file')
-args = parser.parse_args()
-
-#####################################################################
-
-# select a region using the mouse
-
-boxes = []
-current_mouse_position = np.ones(2, dtype=np.int32)
-
 
 def center(points):
     x = np.float32(
@@ -59,43 +19,19 @@ def center(points):
         4.0)
     return np.array([np.float32(x), np.float32(y)], np.float32)
 
-#####################################################################
+cap = cv.VideoCapture('Data/slow_traffic_small.mp4')
+template = cv.imread('Data/biker.png')
 
-# this function is called as a call-back everytime the trackbar is moved
-# (here we just do nothing)
+hsv_template = cv.cvtColor(template, cv.COLOR_BGR2HSV)    
 
+mask = cv.inRange(hsv_template, np.array((0., 50., 30.)), np.array((180., 255., 255.)))
 
-def nothing(x):
-    pass
-
-#####################################################################
-# define video capture object
+template_hist = cv.calcHist([hsv_template], [0, 1], mask, [180, 256] , [0, 180, 0, 256])
+cv.normalize(template_hist, template_hist, 0, 255, cv.NORM_MINMAX)
 
 
-try:
-    # to use a non-buffered camera stream (via a separate thread)
-
-    if not (args.video_file):
-        import camera_stream
-        cap = camera_stream.CameraVideoStream()
-    else:
-        cap = cv2.VideoCapture()  # not needed for video files
-
-except BaseException:
-    # if not then just use OpenCV default
-
-    print("INFO: camera_stream class not found - camera input may be buffered")
-    cap = cv2.VideoCapture()
-
-# define display window name
-
-window_name = "Kalman Object Tracking"  # window name
-window_name2 = "Hue histogram back projection"  # window name
-window_nameSelection = "initial selected region"
-
-# init kalman filter object
-
-kalman = cv2.KalmanFilter(4, 2)
+#Initialize KalmanFilter Object
+kalman = cv.KalmanFilter(4, 2)
 kalman.measurementMatrix = np.array([[1, 0, 0, 0],
                                      [0, 1, 0, 0]], np.float32)
 
@@ -109,242 +45,38 @@ kalman.processNoiseCov = np.array([[1, 0, 0, 0],
                                    [0, 0, 1, 0],
                                    [0, 0, 0, 1]], np.float32) * 0.03
 
-measurement = np.array((2, 1), np.float32)
-prediction = np.zeros((2, 1), np.float32)
+kalman_prediction = np.zeros((2, 1), np.float32)
 
-print("\nObservation in image: BLUE")
-print("Prediction from Kalman: GREEN\n")
+term_crit = (cv.TERM_CRITERIA_EPS | cv.TERM_CRITERIA_COUNT, 10, 1)
 
-# if command line arguments are provided try to read video_name
-# otherwise default to capture from attached H/W camera
+track_window = (592, 180, template.shape[1], template.shape[0])
+counter=0
 
-if (((args.video_file) and (cap.open(str(args.video_file))))
-        or (cap.open(args.camera_to_use))):
+while True:
+    _, frame = cap.read()
+    counter += 1
+    
+    if counter < 114:
+        continue
 
-    # create window by name (note flags for resizable or not)
+    hsv = cv.cvtColor(frame, cv.COLOR_BGR2HSV)
 
-    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-    cv2.namedWindow(window_name2, cv2.WINDOW_NORMAL)
-    cv2.namedWindow(window_nameSelection, cv2.WINDOW_NORMAL)
+    dst = cv.calcBackProject([hsv], [0, 1], template_hist, [0, 180, 0, 256], 1)
+    ret, track_window = cv.CamShift(dst, track_window, term_crit)
 
-    # set sliders for HSV selection thresholds
+    cv.normalize(dst, dst, 0, 255, cv.NORM_MINMAX)
 
-    s_lower = 60
-    cv2.createTrackbar("s lower", window_name2, s_lower, 255, nothing)
-    s_upper = 255
-    cv2.createTrackbar("s upper", window_name2, s_upper, 255, nothing)
-    v_lower = 32
-    cv2.createTrackbar("v lower", window_name2, v_lower, 255, nothing)
-    v_upper = 255
-    cv2.createTrackbar("v upper", window_name2, v_upper, 255, nothing)
+    pts = cv.boxPoints(ret)
+    pts = np.int0(pts)
+    kalman.correct(center(pts))
+    kalman_prediction = kalman.predict()
 
-    # set a mouse callback
+    x, y, w, h = track_window
+    frame = cv.rectangle(frame, (x, y), (x + w, y + h), (0, 0, 255), 1)
+    frame = cv.circle(frame, (int(kalman_prediction[0]), int(kalman_prediction[1])), 3, (0, 255, 0), -1)
+            
+    cv.imshow('img2', frame)
 
-    cv2.setMouseCallback(window_name, on_mouse, 0)
-    cropped = False
-
-    # Setup the termination criteria for search, either 10 iteration or
-    # move by at least 1 pixel pos. difference
-    term_crit = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 1)
-
-    while (keep_processing):
-
-        # if video file successfully open then read frame from video
-
-        if (cap.isOpened):
-            ret, frame = cap.read()
-
-            # rescale if specified
-
-            if (args.rescale != 1.0):
-                frame = cv2.resize(
-                    frame, (0, 0), fx=args.rescale, fy=args.rescale)
-
-        # start a timer (to see how long processing and display takes)
-
-        start_t = cv2.getTickCount()
-
-        # get parameters from track bars
-
-        s_lower = cv2.getTrackbarPos("s lower", window_name2)
-        s_upper = cv2.getTrackbarPos("s upper", window_name2)
-        v_lower = cv2.getTrackbarPos("v lower", window_name2)
-        v_upper = cv2.getTrackbarPos("v upper", window_name2)
-
-        # select region using the mouse and display it
-
-        if (len(boxes) > 1) and (boxes[0][1] < boxes[1][1]) and (
-                boxes[0][0] < boxes[1][0]):
-            crop = frame[boxes[0][1]:boxes[1][1],
-                         boxes[0][0]:boxes[1][0]].copy()
-
-            h, w, c = crop.shape   # size of template
-            if (h > 0) and (w > 0):
-                cropped = True
-
-                # convert region to HSV
-
-                hsv_crop = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
-
-                # select all Hue (0-> 180) and Sat. values but eliminate values
-                # with very low saturation or value (due to lack of useful
-                # colour information)
-
-                mask = cv2.inRange(
-                    hsv_crop, np.array(
-                        (0., float(s_lower), float(v_lower))), np.array(
-                        (180., float(s_upper), float(v_upper))))
-
-                # construct a histogram of hue and saturation values and
-                # normalize it
-
-                crop_hist = cv2.calcHist(
-                    [hsv_crop], [
-                        0, 1], mask, [
-                        180, 255], [
-                        0, 180, 0, 255])
-                cv2.normalize(crop_hist, crop_hist, 0, 255, cv2.NORM_MINMAX)
-
-                # set intial position of object
-
-                track_window = (
-                    boxes[0][0],
-                    boxes[0][1],
-                    boxes[1][0] -
-                    boxes[0][0],
-                    boxes[1][1] -
-                    boxes[0][1])
-
-                cv2.imshow(window_nameSelection, crop)
-
-            # reset list of boxes
-
-            boxes = []
-
-        # interactive display of selection box
-
-        if (selection_in_progress):
-            top_left = (boxes[0][0], boxes[0][1])
-            bottom_right = (
-                current_mouse_position[0],
-                current_mouse_position[1])
-            cv2.rectangle(frame, top_left, bottom_right, (0, 255, 0), 2)
-
-        # if we have a selected region
-
-        if (cropped):
-
-            # convert incoming image to HSV
-
-            img_hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-
-            # back projection of histogram based on Hue and Saturation only
-
-            img_bproject = cv2.calcBackProject(
-                [img_hsv], [
-                    0, 1], crop_hist, [
-                    0, 180, 0, 255], 1)
-            cv2.imshow(window_name2, img_bproject)
-
-            # apply camshift to predict new location (observation)
-            # basic HSV histogram comparision with adaptive window size
-            # see :
-            # http://docs.opencv.org/3.1.0/db/df8/tutorial_py_meanshift.html
-            ret, track_window = cv2.CamShift(
-                img_bproject, track_window, term_crit)
-
-            # draw observation on image - in BLUE
-            x, y, w, h = track_window
-            frame = cv2.rectangle(
-                frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
-
-            # extract centre of this observation as points
-
-            pts = cv2.boxPoints(ret)
-            pts = np.intp(pts)
-            # (cx, cy), radius = cv2.minEnclosingCircle(pts)
-
-            # use to correct kalman filter
-
-            kalman.correct(center(pts))
-
-            # get new kalman filter prediction
-
-            prediction = kalman.predict()
-
-            # draw predicton on image - in GREEN
-
-            frame = cv2.rectangle(frame,
-                                  (int(prediction[0] - (0.5 * w)),
-                                   int(prediction[1] - (0.5 * h))),
-                                  (int(prediction[0] + (0.5 * w)),
-                                   int(prediction[1] + (0.5 * h))),
-                                  (0,
-                                      255,
-                                      0),
-                                  2)
-
-        else:
-
-            # before we have cropped anything show the mask we are using
-            # for the S and V components of the HSV image
-
-            img_hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-
-            # select all Hue values (0-> 180) but eliminate values with very
-            # low saturation or value (due to lack of useful colour info.)
-
-            mask = cv2.inRange(
-                img_hsv, np.array(
-                    (0., float(s_lower), float(v_lower))), np.array(
-                    (180., float(s_upper), float(v_upper))))
-
-            cv2.imshow(window_name2, mask)
-
-        # display image
-
-        cv2.imshow(window_name, frame)
-        cv2.setWindowProperty(
-            window_name,
-            cv2.WND_PROP_FULLSCREEN,
-            cv2.WINDOW_FULLSCREEN & fullscreen)
-
-        # stop the timer and convert to ms. (to see how long processing and
-        # display takes)
-
-        stop_t = ((cv2.getTickCount() - start_t) /
-                  cv2.getTickFrequency()) * 1000
-
-        # start the event loop - essential
-
-        # cv2.waitKey() is a keyboard binding function (argument is the time in
-        # milliseconds). It waits for specified milliseconds for any keyboard
-        # event. If you press any key in that time, the program continues.
-        # If 0 is passed, it waits indefinitely for a key stroke.
-        # (bitwise and with 0xFF to extract least significant byte of
-        # multi-byte response)
-
-        # wait 40ms or less depending on processing time taken (i.e. 1000ms /
-        # 25 fps = 40 ms)
-
-        key = cv2.waitKey(max(2, 40 - int(math.ceil(stop_t)))) & 0xFF
-
-        # It can also be set to detect specific key strokes by recording which
-        # key is pressed
-
-        # e.g. if user presses "x" then exit  / press "f" for fullscreen
-        # display
-
-        if (key == ord('x')):
-            keep_processing = False
-        elif (key == ord('f')):
-            fullscreen = not (fullscreen)
-
-    # close all windows
-
-    cv2.destroyAllWindows()
-
-else:
-    print("No video file specified or camera connected.")
-
-#####################################################################
+    k = cv.waitKey(30) & 0xff
+    if k == 27:
+        break
