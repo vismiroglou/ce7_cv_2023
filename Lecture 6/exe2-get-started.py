@@ -41,17 +41,40 @@ right_remap = cv2.remap(right, leftmapX, rightmapY, cv2.INTER_LANCZOS4)
 
 # Let's try to compare the two images before and after rectifying them
 # Plot the two original images side-by-side
-ax = plt.subplot(211)
-ax.set_title('original')
-ax.imshow(np.hstack([left,right]),'gray')
+# ax = plt.subplot(211)
+# ax.set_title('original')
+# ax.imshow(np.hstack([left,right]),'gray')
 
-# Plot the two remapped images side-by-side
-ax = plt.subplot(212)
-ax.set_title('remapped')
-ax.imshow(np.hstack([left_remap,right_remap]),'gray')
-plt.show()
+# # Plot the two remapped images side-by-side
+# ax = plt.subplot(212)
+# ax.set_title('remapped')
+# ax.imshow(np.hstack([left_remap,right_remap]),'gray')
+# plt.show()
 # They look pretty much identical with the expection of some extra padding
 # for the rectifying images. You can use both pair of images for the rest
 # of the exercise. It is up to you - both should give valid results.
 
 # You do the rest! Start by calculating the disparity map
+
+stereo = cv2.StereoBM.create(numDisparities=80, blockSize=15)
+disp = stereo.compute(left,right).astype(np.float32)
+disp_remap = stereo.compute(left_remap,right_remap).astype(np.float32)
+
+points = cv2.reprojectImageTo3D(disp, Q)
+points_remap = cv2.reprojectImageTo3D(disp_remap, Q)
+
+depth_map = points[:, :, 2].astype(np.float32)
+depth_map_remap = points[:, :, 2].astype(np.float32)
+
+depth_max = 2000.0
+depth_map[depth_map > depth_max] = depth_max
+depth_map[depth_map < 0.0] = 0.0
+
+depth_map_remap[depth_map_remap > depth_max] = depth_max
+depth_map_remap[depth_map_remap < 0.0] = 0.0
+
+plt.imshow(depth_map,'jet')
+plt.show()
+
+plt.imshow(depth_map_remap,'jet')
+plt.show()
